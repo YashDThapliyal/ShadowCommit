@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shadowcommit"
+version = "0.1.0"
+description = "AI safety control protocol for untrusted bash agents"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "autopep8>=2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=shadowcommit --cov-report=term-missing --cov-fail-under=80"
+
+[tool.coverage.run]
+source = ["shadowcommit"]
+omit = ["tests/*"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shadowcommit*"]
