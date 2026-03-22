@@ -1,0 +1,161 @@
+"""Shadow execution engine — clones the workspace, runs commands in isolation, tears down after.
+
+The real workspace is never modified by command execution. All effects are
+confined to the shadow copy, which is always torn down after execution.
+
+Known limitations (MVP):
+- Background processes spawned by a command may survive shadow teardown.
+- Shell obfuscation that avoids path rewriting will not be caught here;
+  Phase 5 diff comparison provides a second layer of defense.
+- Fingerprinting uses mtime_ns + size; noatime mounts weaken the mtime signal
+  but size and file count still detect most mutations.
+"""
+import dataclasses
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutionResult:
+    """Immutable record of a single shadow-executed command.
+
+    Return codes -1 and -2 are sentinels:
+      -1: command exceeded the configured timeout
+      -2: an unexpected internal error occurred before/during execution
+    """
+
+    command: str
+    rewritten_command: str
+    shadow_path: Path
+    stdout: str
+    stderr: str
+    returncode: int
+    duration_seconds: float
+    real_workspace_untouched: bool
+    timed_out: bool
+
+
+def _rewrite_paths(command: str, real_path: Path, shadow_path: Path) -> str:
+    """Replace all occurrences of real_path in command with shadow_path.
+
+    Uses simple string replacement. Safe because workspace paths are created
+    via tempfile.mkdtemp with random suffixes, making accidental collisions
+    effectively impossible.
+
+    Args:
+        command: The original bash command string.
+        real_path: The real workspace directory path to replace.
+        shadow_path: The shadow copy path to substitute in.
+
+    Returns:
+        Command string with all real_path occurrences replaced.
+    """
+    return command.replace(str(real_path), str(shadow_path))
+
+
+def _fingerprint_workspace(workspace_path: Path) -> list[tuple[str, int, int]]:
+    """Compute a fingerprint of a workspace directory.
+
+    Walks the entire directory tree and returns a sorted list of
+    (relative_path, file_size_bytes, mtime_nanoseconds) tuples.
+    An identical fingerprint before and after execution means the
+    workspace was not modified.
+
+    Args:
+        workspace_path: Directory to fingerprint.
+
+    Returns:
+        Sorted list of (rel_path, size, mtime_ns) tuples for every file.
+    """
+    entries: list[tuple[str, int, int]] = []
+    for file_path in workspace_path.rglob("*"):
+        if file_path.is_file():
+            stat = file_path.stat()
+            rel = str(file_path.relative_to(workspace_path))
+            entries.append((rel, stat.st_size, stat.st_mtime_ns))
+    return sorted(entries, key=lambda t: t[0])
+
+
+class ShadowExecutor:
+    """Executes bash commands in an isolated shadow copy of the workspace.
+
+    The real workspace is fingerprinted before and after execution to
+    verify it was not touched. The shadow copy is always torn down after
+    execution, regardless of success or failure.
+    """
+
+    def __init__(self, timeout: float = 30.0) -> None:
+        """Initialise the executor.
+
+        Args:
+            timeout: Maximum wall-clock seconds allowed per command.
+                     Exceeded commands are killed and marked timed_out=True.
+        """
+        self.timeout = timeout
+
+    def execute(self, command: str, workspace_path: Path) -> ExecutionResult:
+        """Clone workspace, execute command in shadow, capture results, teardown.
+
+        Args:
+            command: Bash command string to execute (may contain absolute paths
+                     pointing at workspace_path; these are rewritten to the shadow).
+            workspace_path: Absolute path to the real workspace directory.
+
+        Returns:
+            ExecutionResult with all captured data. shadow_path will not exist
+            on disk after this method returns.
+        """
+        before_fp = _fingerprint_workspace(workspace_path)
+        shadow_path = Path(tempfile.mkdtemp(prefix="shadowcommit_shadow_"))
+
+        try:
+            shutil.copytree(str(workspace_path), str(shadow_path), dirs_exist_ok=True)
+            rewritten = _rewrite_paths(command, workspace_path, shadow_path)
+
+            stdout = ""
+            stderr = ""
+            returncode = -2
+            timed_out = False
+            start = time.monotonic()
+
+            try:
+                proc = subprocess.run(
+                    rewritten,
+                    shell=True,
+                    cwd=str(shadow_path),
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                )
+                stdout = proc.stdout
+                stderr = proc.stderr
+                returncode = proc.returncode
+
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                returncode = -1
+                stdout = (exc.stdout or b"").decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+                stderr = (exc.stderr or b"").decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+
+            duration = time.monotonic() - start
+
+        finally:
+            shutil.rmtree(shadow_path, ignore_errors=True)
+
+        after_fp = _fingerprint_workspace(workspace_path)
+        real_workspace_untouched = before_fp == after_fp
+
+        return ExecutionResult(
+            command=command,
+            rewritten_command=rewritten,
+            shadow_path=shadow_path,
+            stdout=stdout,
+            stderr=stderr,
+            returncode=returncode,
+            duration_seconds=duration,
+            real_workspace_untouched=real_workspace_untouched,
+            timed_out=timed_out,
+        )
