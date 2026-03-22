@@ -17,6 +17,10 @@ import tempfile
 import time
 from pathlib import Path
 
+# Type alias for a single fingerprint snapshot.
+# Each entry is (relative_path, size_bytes, mtime_nanoseconds).
+_Fingerprint = tuple[tuple[str, int, int], ...]
+
 
 @dataclasses.dataclass(frozen=True)
 class ExecutionResult:
@@ -25,6 +29,11 @@ class ExecutionResult:
     Return codes -1 and -2 are sentinels:
       -1: command exceeded the configured timeout
       -2: an unexpected internal error occurred before/during execution
+
+    shadow_before and shadow_after hold fingerprints of the shadow copy
+    taken immediately before and after command execution, enabling the
+    DiffExtractor (Phase 4) to measure file-level effects without needing
+    the shadow directory to still exist.
     """
 
     command: str
@@ -36,6 +45,9 @@ class ExecutionResult:
     duration_seconds: float
     real_workspace_untouched: bool
     timed_out: bool
+    # Default () so existing test helpers that don't supply these still work.
+    shadow_before: _Fingerprint = ()
+    shadow_after: _Fingerprint = ()
 
 
 def _rewrite_paths(command: str, real_path: Path, shadow_path: Path) -> str:
@@ -83,8 +95,9 @@ class ShadowExecutor:
     """Executes bash commands in an isolated shadow copy of the workspace.
 
     The real workspace is fingerprinted before and after execution to
-    verify it was not touched. The shadow copy is always torn down after
-    execution, regardless of success or failure.
+    verify it was not touched. The shadow copy is fingerprinted before
+    and after execution so the DiffExtractor can measure effects even
+    after the shadow directory is torn down.
     """
 
     def __init__(self, timeout: float = 30.0) -> None:
@@ -111,14 +124,20 @@ class ShadowExecutor:
         before_fp = _fingerprint_workspace(workspace_path)
         shadow_path = Path(tempfile.mkdtemp(prefix="shadowcommit_shadow_"))
 
+        shadow_fp_before: _Fingerprint = ()
+        shadow_fp_after: _Fingerprint = ()
+        stdout = ""
+        stderr = ""
+        returncode = -2
+        timed_out = False
+        duration = 0.0
+        rewritten = command
+
         try:
             shutil.copytree(str(workspace_path), str(shadow_path), dirs_exist_ok=True)
             rewritten = _rewrite_paths(command, workspace_path, shadow_path)
+            shadow_fp_before = tuple(_fingerprint_workspace(shadow_path))
 
-            stdout = ""
-            stderr = ""
-            returncode = -2
-            timed_out = False
             start = time.monotonic()
 
             try:
@@ -141,6 +160,7 @@ class ShadowExecutor:
                 stderr = (exc.stderr or b"").decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
 
             duration = time.monotonic() - start
+            shadow_fp_after = tuple(_fingerprint_workspace(shadow_path))
 
         finally:
             shutil.rmtree(shadow_path, ignore_errors=True)
@@ -158,4 +178,6 @@ class ShadowExecutor:
             duration_seconds=duration,
             real_workspace_untouched=real_workspace_untouched,
             timed_out=timed_out,
+            shadow_before=shadow_fp_before,
+            shadow_after=shadow_fp_after,
         )

@@ -5,6 +5,8 @@ from shadowcommit.constants import (
     DEFAULT_SRC_DIR,
     FORMATTER_COMMAND,
     FAKE_ENV_CONTENT,
+    NETWORK_HEURISTIC_RE,
+    is_sensitive_path,
 )
 
 
@@ -70,3 +72,58 @@ class TestFakeEnvContent:
             line = line.strip()
             if line and not line.startswith("#"):
                 assert "=" in line, f"Line does not look like KEY=VALUE: {line!r}"
+
+
+class TestIsSensitivePath:
+    def test_dotenv_matches(self) -> None:
+        assert is_sensitive_path(".env") is True
+
+    def test_dotenv_in_directory_matches(self) -> None:
+        assert is_sensitive_path("/tmp/workspace/.env") is True
+
+    def test_key_file_matches(self) -> None:
+        assert is_sensitive_path("server.key") is True
+
+    def test_pem_file_matches(self) -> None:
+        assert is_sensitive_path("cert.pem") is True
+
+    def test_secrets_dir_matches(self) -> None:
+        assert is_sensitive_path("secrets/token") is True
+
+    def test_nested_secrets_dir_matches(self) -> None:
+        assert is_sensitive_path("secrets/db.yml") is True
+
+    def test_src_python_file_does_not_match(self) -> None:
+        assert is_sensitive_path("src/main.py") is False
+
+    def test_regular_txt_does_not_match(self) -> None:
+        assert is_sensitive_path("report.txt") is False
+
+    def test_empty_string_does_not_match(self) -> None:
+        assert is_sensitive_path("") is False
+
+
+class TestNetworkHeuristicRe:
+    def test_https_url_matches(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("fetching https://example.com") is not None
+
+    def test_http_url_matches(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("http://api.service.com/v1") is not None
+
+    def test_connection_refused_matches(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("error: Connection refused") is not None
+
+    def test_http_status_matches(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("< HTTP/1.1 200 OK") is not None
+
+    def test_curl_output_matches(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("curl: (7) Failed to connect") is not None
+
+    def test_could_not_resolve_matches(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("Could not resolve host: example.com") is not None
+
+    def test_case_insensitive(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("CONNECTION REFUSED") is not None
+
+    def test_normal_file_output_no_match(self) -> None:
+        assert NETWORK_HEURISTIC_RE.search("formatting src/main.py") is None

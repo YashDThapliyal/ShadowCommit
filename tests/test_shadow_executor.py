@@ -307,3 +307,48 @@ class TestShadowExecutorIntegration:
         # autopep8 may not be installed; just verify real workspace untouched
         assert result.real_workspace_untouched is True
         assert not result.shadow_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Shadow fingerprint capture
+# ---------------------------------------------------------------------------
+
+class TestShadowFingerprints:
+    def test_shadow_before_is_nonempty_tuple(self, workspace: Path) -> None:
+        result = ShadowExecutor().execute("echo hi", workspace)
+        assert isinstance(result.shadow_before, tuple)
+        assert len(result.shadow_before) > 0
+
+    def test_shadow_after_is_nonempty_tuple(self, workspace: Path) -> None:
+        result = ShadowExecutor().execute("echo hi", workspace)
+        assert isinstance(result.shadow_after, tuple)
+        assert len(result.shadow_after) > 0
+
+    def test_readonly_command_shadow_fingerprints_equal(self, workspace: Path) -> None:
+        result = ShadowExecutor().execute("echo hi", workspace)
+        assert result.shadow_before == result.shadow_after
+
+    def test_file_created_shadow_after_differs(self, workspace: Path) -> None:
+        result = ShadowExecutor().execute("touch newfile.txt", workspace)
+        assert result.shadow_before != result.shadow_after
+        after_paths = {entry[0] for entry in result.shadow_after}
+        assert "newfile.txt" in after_paths
+
+    def test_file_modified_shadow_after_differs(self, workspace: Path) -> None:
+        result = ShadowExecutor().execute("echo x >> src/main.py", workspace)
+        assert result.shadow_before != result.shadow_after
+
+    def test_file_deleted_shadow_after_differs(self, workspace: Path) -> None:
+        result = ShadowExecutor().execute("rm src/utils.py", workspace)
+        assert result.shadow_before != result.shadow_after
+        after_paths = {entry[0] for entry in result.shadow_after}
+        assert "src/utils.py" not in after_paths
+
+    def test_defaults_are_empty_tuples(self) -> None:
+        r = ExecutionResult(
+            command="x", rewritten_command="x", shadow_path=Path("/tmp"),
+            stdout="", stderr="", returncode=0, duration_seconds=0.0,
+            real_workspace_untouched=True, timed_out=False,
+        )
+        assert r.shadow_before == ()
+        assert r.shadow_after == ()

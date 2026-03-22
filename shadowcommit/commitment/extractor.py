@@ -9,13 +9,11 @@ Limitations (known and accepted for MVP):
   Obfuscated commands that slip past this analyzer will still be caught in
   Phase 5 when the shadow executor's observed diff is compared to the commitment.
 """
-import fnmatch
 import re
 import shlex
-from pathlib import PurePosixPath
 
 from shadowcommit.commitment.schema import Commitment
-from shadowcommit.constants import SENSITIVE_PATTERNS
+from shadowcommit.constants import is_sensitive_path
 
 # Commands whose first token indicates the following arguments are files being read.
 _READ_VERBS: frozenset[str] = frozenset({
@@ -55,14 +53,6 @@ def _split_subcommands(command: str) -> list[str]:
     """
     return re.split(r"\s*(?:&&|\|\||\||;)\s*", command)
 
-
-def _is_sensitive(path: str) -> bool:
-    """Return True if path matches any pattern in SENSITIVE_PATTERNS."""
-    name = PurePosixPath(path).name
-    for pattern in SENSITIVE_PATTERNS:
-        if fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(path, pattern):
-            return True
-    return False
 
 
 def _analyze_subcommand(
@@ -157,7 +147,7 @@ def _analyze_subcommand(
         if _looks_like_path(tok) and not tok.startswith("-"):
             all_paths.append(tok)
 
-    if any(_is_sensitive(p) for p in all_paths):
+    if any(is_sensitive_path(p) for p in all_paths):
         sensitive = True
 
     return files_read, files_modified, files_created, network, sensitive, privileged
