@@ -12,9 +12,12 @@ from shadowcommit.eval.run_eval import (
     MethodMetrics,
     _run_text_only_monitor,
     compute_metrics,
+    format_extended_results_table,
+    format_extended_summary,
     format_results_table,
     format_summary,
     run_evaluation,
+    run_evaluation_extended,
 )
 
 
@@ -384,3 +387,148 @@ class TestRunEvaluationIntegration:
         results = run_evaluation(num_trials=1)
         names = [r.method_name for r in results]
         assert len(set(names)) == 3
+
+
+# ---------------------------------------------------------------------------
+# run_evaluation_extended
+# ---------------------------------------------------------------------------
+
+class TestRunEvaluationExtended:
+    def test_returns_dict_with_two_keys(self) -> None:
+        results = run_evaluation_extended(num_trials=1)
+        assert set(results.keys()) == {"original", "obfuscated"}
+
+    def test_each_key_has_three_method_metrics(self) -> None:
+        results = run_evaluation_extended(num_trials=1)
+        for key in ("original", "obfuscated"):
+            assert len(results[key]) == 3
+            for m in results[key]:
+                assert isinstance(m, MethodMetrics)
+
+    def test_original_baseline1_safety_zero(self) -> None:
+        results = run_evaluation_extended(num_trials=1)
+        b1 = next(m for m in results["original"] if "none" in m.method_name.lower()
+                  or "Baseline 1" in m.method_name)
+        assert b1.safety_rate == pytest.approx(0.0)
+
+    def test_original_method3_catches_attack(self) -> None:
+        results = run_evaluation_extended(num_trials=1)
+        m3 = next(m for m in results["original"] if "shadow" in m.method_name.lower()
+                  or "Method 3" in m.method_name)
+        assert m3.safety_rate == pytest.approx(1.0)
+
+    def test_obfuscated_baseline2_misses_attack(self) -> None:
+        """Key result: text monitor fails on obfuscated commands."""
+        results = run_evaluation_extended(num_trials=1)
+        b2 = next(m for m in results["obfuscated"] if "text" in m.method_name.lower()
+                  or "Baseline 2" in m.method_name)
+        assert b2.safety_rate == pytest.approx(0.0), (
+            "Baseline 2 (text monitor) must have 0% safety rate on obfuscated attacks"
+        )
+
+    def test_obfuscated_method3_catches_attack(self) -> None:
+        """Key result: shadow execution still catches obfuscated commands."""
+        results = run_evaluation_extended(num_trials=1)
+        m3 = next(m for m in results["obfuscated"] if "shadow" in m.method_name.lower()
+                  or "Method 3" in m.method_name)
+        assert m3.safety_rate == pytest.approx(1.0), (
+            "Method 3 must have 100% safety rate even on obfuscated attacks"
+        )
+
+    def test_all_methods_allow_legitimate_commands(self) -> None:
+        results = run_evaluation_extended(num_trials=1)
+        for key in ("original", "obfuscated"):
+            for m in results[key]:
+                assert m.task_completion_rate == pytest.approx(1.0), (
+                    f"{key}/{m.method_name} blocked a legitimate command"
+                )
+
+    def test_all_latencies_non_negative(self) -> None:
+        results = run_evaluation_extended(num_trials=1)
+        for key in ("original", "obfuscated"):
+            for m in results[key]:
+                assert m.mean_latency_seconds >= 0.0
+
+    def test_method_names_consistent_across_agents(self) -> None:
+        results = run_evaluation_extended(num_trials=1)
+        orig_names = [m.method_name for m in results["original"]]
+        obf_names = [m.method_name for m in results["obfuscated"]]
+        assert orig_names == obf_names
+
+
+# ---------------------------------------------------------------------------
+# format_extended_results_table
+# ---------------------------------------------------------------------------
+
+class TestFormatExtendedResultsTable:
+    def _results(self) -> dict[str, list[MethodMetrics]]:
+        return {
+            "original": [
+                MethodMetrics("Baseline 1 (none)", 0.0, 1.0, 0.0, 0.05),
+                MethodMetrics("Baseline 2 (text)", 1.0, 1.0, 0.0, 0.00),
+                MethodMetrics("Method 3 (shadow)", 1.0, 1.0, 0.0, 0.06),
+            ],
+            "obfuscated": [
+                MethodMetrics("Baseline 1 (none)", 0.0, 1.0, 0.0, 0.05),
+                MethodMetrics("Baseline 2 (text)", 0.0, 1.0, 0.0, 0.00),
+                MethodMetrics("Method 3 (shadow)", 1.0, 1.0, 0.0, 0.06),
+            ],
+        }
+
+    def test_returns_string(self) -> None:
+        assert isinstance(format_extended_results_table(self._results()), str)
+
+    def test_contains_header(self) -> None:
+        table = format_extended_results_table(self._results())
+        assert "Safety" in table
+        assert "Latency" in table
+
+    def test_six_data_rows(self) -> None:
+        table = format_extended_results_table(self._results())
+        lines_with_percent = [l for l in table.splitlines() if "%" in l]
+        assert len(lines_with_percent) == 6
+
+    def test_contains_both_agent_labels(self) -> None:
+        table = format_extended_results_table(self._results())
+        assert "original" in table.lower() or "Original" in table
+        assert "obfuscated" in table.lower() or "Obfuscated" in table
+
+    def test_contains_separator_between_groups(self) -> None:
+        table = format_extended_results_table(self._results())
+        assert table.count("---") >= 2  # at least header sep + group sep
+
+
+# ---------------------------------------------------------------------------
+# format_extended_summary
+# ---------------------------------------------------------------------------
+
+class TestFormatExtendedSummary:
+    def _results(self) -> dict[str, list[MethodMetrics]]:
+        return {
+            "original": [
+                MethodMetrics("Baseline 1 (none)", 0.0, 1.0, 0.0, 0.05),
+                MethodMetrics("Baseline 2 (text)", 1.0, 1.0, 0.0, 0.00),
+                MethodMetrics("Method 3 (shadow)", 1.0, 1.0, 0.0, 0.06),
+            ],
+            "obfuscated": [
+                MethodMetrics("Baseline 1 (none)", 0.0, 1.0, 0.0, 0.05),
+                MethodMetrics("Baseline 2 (text)", 0.0, 1.0, 0.0, 0.00),
+                MethodMetrics("Method 3 (shadow)", 1.0, 1.0, 0.0, 0.06),
+            ],
+        }
+
+    def test_returns_non_empty_string(self) -> None:
+        s = format_extended_summary(self._results())
+        assert isinstance(s, str) and len(s) > 0
+
+    def test_mentions_obfuscation(self) -> None:
+        s = format_extended_summary(self._results())
+        assert "obfuscat" in s.lower()
+
+    def test_mentions_baseline2_failure(self) -> None:
+        s = format_extended_summary(self._results())
+        assert "baseline 2" in s.lower() or "text" in s.lower()
+
+    def test_mentions_method3_success(self) -> None:
+        s = format_extended_summary(self._results())
+        assert "method 3" in s.lower() or "shadow" in s.lower()
