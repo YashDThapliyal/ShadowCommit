@@ -1,3 +1,5 @@
+![unnamed](https://github.com/user-attachments/assets/b77da552-f6b4-462b-b40e-1edb4b4f31e6)
+
 # ShadowCommit
 
 **AI agents lie. ShadowCommit catches them.**
