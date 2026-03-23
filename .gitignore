@@ -40,3 +40,13 @@ shadowcommit_*/
 
 # macOS
 .DS_Store
+
+# AI agent / IDE tooling
+.agents/
+.claude/
+.codex/
+.cursor/
+.opencode/
+.github/skills/
+skills-lock.json
+claude.md

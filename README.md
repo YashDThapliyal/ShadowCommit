@@ -94,7 +94,7 @@ pip install -e ".[dev]"
 pytest tests/ -v --cov=shadowcommit
 
 # Run the comprehensive benchmark (all 5 attack types x 3 methods)
-python -m shadowcommit.eval.run_eval --comprehensive --trials 3
+python shadowcommit/eval/run_eval.py --comprehensive --trials 3
 ```
 
 ### Sample output
