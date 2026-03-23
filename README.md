@@ -6,6 +6,8 @@
 
 When an untrusted AI agent proposes a bash command, it also submits a signed commitment: "I will only touch these files, read no secrets, make no network calls." ShadowCommit runs the command in an isolated shadow copy of the environment, measures what actually happened, and compares the two. If the agent lied, the command is blocked before it ever touches the real environment.
 
+Watch the demo video here: https://www.youtube.com/watch?v=C2fOV8-JnVI
+
 ---
 
 ## The Problem
